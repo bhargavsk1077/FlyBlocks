@@ -11,7 +11,7 @@ from block_config import Config
 
 app=Flask(__name__)
 app.config.from_object(Config)
-#migrate = Migrate(app,db)
+
 
 import transaction_model
 from transaction_model import Block,Transaction,Blockchain,Peers,db
@@ -25,16 +25,72 @@ def return_peers():
         p.append(peer.address)
     return p
 
+
+def consensus():
+    global blockchain
+    longest_chain = None 
+    current_len = len(blockchain.chain)
+
+    for node in peers:
+        try:
+            response = requests.get('{}chain'.format(node))
+            length = response.json()['length']
+            chain = response.json()['chain']
+            if length > current_len and blockchain.check_chain_validity(chain):
+                current_len=length
+                longest_chain=chain
+            #print("try in consensus passed")
+        except Exception as e:
+            print(e)
+
+
+    if longest_chain:
+        blockchain = create_chain_from_dump(longest_chain)
+        return True
+
+    return False
+
+def create_chain_from_dump(chain_dump):
+    #print("creating chain from dump")
+    Block.query.delete()
+    Transaction.query.delete()
+    db.session.commit()
+    blockchain = Blockchain()
+    blockchain.create_genesis()
+    for idx, block_data in enumerate(chain_dump):
+        if idx==0:
+            continue
+        block = Block(block_data["id"],
+                      block_data["previous_hash"],
+                      datetime.fromtimestamp(block_data["block_timestamp"]),
+                      block_data["nonce"])
+        proof = block_data['block_hash']
+        #===========================================
+        db.session.add(block)
+        db.session.commit()
+
+        new_block=Block.query.get(blockchain.last_block["id"]+1)
+        new_block.add_tx(block_data["transactions"])
+        db.session.commit()
+        #=========================================
+        added = blockchain.add_block(new_block.id, proof)
+        if not added:
+            raise Exception("The chain dump is tampered!!")
+    #print("created chain from dump succesfully")
+    return blockchain
+
 with app.app_context():
     try:
         blockchain = Blockchain()
         if not blockchain.chain:
             blockchain.create_genesis()
-        #peers = set(return_peers())
-    
+         
         peers = set(return_peers())
+        #print(peers)
+        #print("starting consensus")
+        consensus()
     except Exception as e:
-        #print(e)
+        print(e)
         pass
 
 
@@ -57,9 +113,7 @@ def new_transaction():
 
 @app.route("/chain",methods=['GET'])
 def get_chain():
-    chain_data=blockchain.chain
-    #for block in blockchain.chain:
-        #chain_data.append(block.__dict__)
+    chain_data=blockchain.chain 
     return json.dumps({"length":len(chain_data),"chain":chain_data,"peers":list(peers)})
 
 @app.route("/pending",methods=['GET'])
@@ -114,60 +168,15 @@ def register_with_existing_node():
     else:
         return response.content,response.status_code
 
-def create_chain_from_dump(chain_dump):
-    Block.query.delete()
-    Transaction.query.delete()
-    db.session.commit()
-    blockchain = Blockchain()
-    blockchain.create_genesis()
-    for idx, block_data in enumerate(chain_dump):
-        if idx==0:
-            continue
-        block = Block(block_data["id"],
-                      block_data["previous_hash"],
-                      datetime.fromtimestamp(block_data["block_timestamp"]),
-                      block_data["nonce"])
-        proof = block_data['block_hash']
-        #===========================================
-        db.session.add(block)
-        db.session.commit()
-
-        new_block=Block.query.get(blockchain.last_block["id"]+1)
-        new_block.add_tx(block_data["transactions"])
-        db.session.commit()
-        #=========================================
-        added = blockchain.add_block(new_block.id, proof)
-        if not added:
-            raise Exception("The chain dump is tampered!!")
-        
-    return blockchain
- 
-
-def consensus():
-    global blockchain
-    longest_chain = None 
-    current_len = len(blockchain.chain)
-
-    for node in peers:
-        response = requests.get('{}chain'.format(node))
-        length = response.json()['length']
-        chain = response.json()['chain']
-        if length > current_len and blockchain.check_chain_validity(chain):
-            current_len=length
-            longest_chain=chain
-
-    if longest_chain:
-        blockchain = create_chain_from_dump(longest_chain)
-        return True
-
-    return False
-
 
 def announce_block(block):
     for peer in peers:
-        url = "{}add_block".format(peer)
-        headers = {"Content-Type":"application/json"}
-        requests.post(url, data=json.dumps(block,sort_keys=True),headers=headers)
+        try:
+            url = "{}add_block".format(peer)
+            headers = {"Content-Type":"application/json"}
+            requests.post(url, data=json.dumps(block,sort_keys=True),headers=headers)
+        except:
+            pass
 
 @app.route("/add_block",methods=['POST'])
 def verify_and_add_block():
@@ -206,6 +215,7 @@ def mine_unconfirmed_transcations():
         consensus()
         if chain_length == len(blockchain.chain):
             announce_block(blockchain.last_block)
+
         return "Block #{} has been mined".format(blockchain.last_block["id"])
 
 

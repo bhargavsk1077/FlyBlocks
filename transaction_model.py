@@ -91,8 +91,7 @@ class Blockchain:
     difficulty = 2
 
     def __init__(self):
-        self.chain=self.return_chain()
-        #self.create_genesis()
+        self.chain=self.return_chain() 
         self.unconfirmed_transactions=[]
 
     @staticmethod
@@ -124,10 +123,10 @@ class Blockchain:
     def create_genesis(self):
         dt = datetime.fromtimestamp(0)
         genesis = Block(0,"0",dt)
-        genesis.set_hash(genesis.compute_hash())
         db.session.add(genesis)
         db.session.commit()
-        self.chain=self.return_chain()
+        proof=self.proof_work(0)
+        self.add_block(0,proof)
 
     def new_transaction(self,transaction):
         self.unconfirmed_transactions.append(transaction)
@@ -149,7 +148,7 @@ class Blockchain:
         
         new_id = last_block["id"]+1
         proof=self.proof_work(new_id)
-        #db.session.commit()
+        
         self.add_block(new_id,proof)
         self.unconfirmed_transactions=[]
         return new_block.id
@@ -174,19 +173,16 @@ class Blockchain:
         return computed_hash
 
     def add_block(self, block_id, proof):
-        """
-        A function that adds the block to the chain after verification.
-        Verification includes:
-        * Checking if the proof is valid.
-        * The previous_hash referred in the block and the hash of a latest block
-          in the chain match.
-        """
+        
         block = Block.query.get(block_id)
-
-        previous_hash = self.last_block["block_hash"]
+        
+        if block_id==0:
+            previous_hash="0"
+        else:    
+            previous_hash = self.last_block["block_hash"]
 
         if previous_hash != block.previous_hash:
-            print("hash did not match")
+            #print("hash did not match")
             #print(previous_hash)
             #print(block.previous_hash)
             Transaction.query.filter_by(block_id=block.id).delete()
@@ -195,7 +191,7 @@ class Blockchain:
             return False
 
         if not Blockchain.is_valid_proof(block_id, proof):
-            print("is valid proof failed")
+            #print("is valid proof failed")
             Transaction.query.filter_by(block_id=block.id).delete()
             Block.query.filter_by(id=block.id).delete()
             db.session.commit()
@@ -208,19 +204,19 @@ class Blockchain:
 
     @classmethod
     def is_valid_proof(self, block_id, block_hash):
-        """
-        Check if block_hash is valid hash of block and satisfies
-        the difficulty criteria.
-        """
+        
         block = Block.query.get(block_id)
         return (block_hash.startswith('0' * Blockchain.difficulty) and
                 block_hash == block.compute_hash())
 
     @classmethod
     def is_valid(self,block,block_hash):
-        
-        return (block_hash.startswith('0'*Blockchain.difficulty) and
+        #print(block)
+        x= (block_hash.startswith('0'*Blockchain.difficulty) and
                 block_hash == self.check_hash(block))
+        print("inside is valid {}".format(x))
+        return x
+
 
     @classmethod
     def check_chain_validity(self,chain):
@@ -229,14 +225,13 @@ class Blockchain:
 
         for block in chain:
             block_hash = block["block_hash"]
-            del block["block_hash"]
-            #block1 = create_instance(block)
+            del block["block_hash"] 
             if not self.is_valid(block,block_hash) or \
-                    previous_hash != block.previous_hash:
+                    previous_hash != block["previous_hash"]:
                         result=False
                         break
             block["block_hash"],previous_hash = block_hash,block_hash
-
+        #print("check chain vaildity result is {}".format(result))
         return result
     
     @staticmethod
@@ -251,11 +246,7 @@ class Blockchain:
 
     @staticmethod
     def check_hash(block):
-        #block = Block.query.get(block_id)
-        #ts = block['block_timestamp']
-        """del block['block_timestamp']
-        if isinstance(ts,datetime):
-            block['block_timestamp']=ts.timestamp"""
+        
         block_str=json.dumps(block,sort_keys=True)
         return sha256(block_str.encode()).hexdigest()
 
